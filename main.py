@@ -15,10 +15,31 @@ import kagglehub
 import cv2
 import os
 
-# Download latest version
-path = kagglehub.dataset_download("vijay20213/shape-detection-circle-square-triangle")
-print("Path to dataset files:", path)
-loaded_data = pd.read_csv(path + "\\Shapes Dataset.csv")
+# ---------- Funkcje pomocnicze ----------
+
+def center_and_resize(roi, size=25):
+    h, w = roi.shape
+    canvas = np.ones((size, size), dtype=np.uint8)  # białe tło
+    y_offset = (size - h) // 2
+    x_offset = (size - w) // 2
+    canvas[y_offset:y_offset+h, x_offset:x_offset+w] = roi
+    return canvas
+
+def compute_metrics(model, test_loader):
+    acc = torchmetrics.Accuracy(task="multiclass", num_classes=3)
+    precision = torchmetrics.Precision(task="multiclass", num_classes=3, average='macro')
+    recall = torchmetrics.Recall(task="multiclass", num_classes=3, average='macro')
+    model.eval()
+    with torch.no_grad():
+        for images, labels in test_loader:
+            outputs = model(images)
+            _, preds = torch.max(outputs, 1)
+            acc(preds, labels)
+            precision(preds, labels)
+            recall(preds, labels)
+    return acc.compute(), precision.compute(), recall.compute()
+
+# ---------- Dataset ----------
 
 class ShapeCSVDataset(torch.utils.data.Dataset):
     def __init__(self, dataframe):
@@ -33,13 +54,24 @@ class ShapeCSVDataset(torch.utils.data.Dataset):
         label = self.labels[idx]
         return torch.tensor(img), torch.tensor(label)
 
-def center_and_resize(roi, size=25):
-    h, w = roi.shape
-    canvas = np.ones((size, size), dtype=np.uint8)  # białe tło
-    y_offset = (size - h) // 2
-    x_offset = (size - w) // 2
-    canvas[y_offset:y_offset+h, x_offset:x_offset+w] = roi
-    return canvas
+# ---------- Model ----------
+
+class CNN(nn.Module):
+    def __init__(self):
+        super(CNN, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels=1, out_channels=16, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, padding=1)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.fc1 = nn.Linear(32 * 6 * 6, 3)
+
+    def forward(self, x):
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = x.view(x.size(0), -1)
+        x = self.fc1(x)
+        return x
+
+# ---------- Klasa do obsługi obrazu ----------
 
 class ShapeImage:
     def __init__(self, image_pil):
@@ -100,25 +132,18 @@ class ShapeImage:
     def get_result_image(self):
         return self.result_img
 
+# ---------- Przygotowanie danych ----------
+
+path = kagglehub.dataset_download("vijay20213/shape-detection-circle-square-triangle")
+print("Path to dataset files:", path)
+loaded_data = pd.read_csv(path + "\\Shapes Dataset.csv")
+
 batch_size = 600
 dataset = ShapeCSVDataset(loaded_data)
 train_loader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=True)
 test_loader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=True)
 
-class CNN(nn.Module):
-    def __init__(self):
-        super(CNN, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels=1, out_channels=16, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, padding=1)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.fc1 = nn.Linear(32 * 6 * 6, 3)
-
-    def forward(self, x):
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = x.view(x.size(0), -1)
-        x = self.fc1(x)
-        return x
+# ---------- Inicjalizacja modelu ----------
 
 model_path = "model.pth"
 model = CNN()
@@ -145,37 +170,25 @@ else:
     torch.save(model.state_dict(), model_path)
     st.sidebar.success("Model został wytrenowany i zapisany.")
 
-# Set up of multiclass accuracy metric
-def compute_metrics(model, test_loader):
-    acc = torchmetrics.Accuracy(task="multiclass", num_classes=3)
-    precision = torchmetrics.Precision(task="multiclass", num_classes=3, average='macro')
-    recall = torchmetrics.Recall(task="multiclass", num_classes=3, average='macro')
-    model.eval()
-    with torch.no_grad():
-        for images, labels in test_loader:
-            outputs = model(images)
-            _, preds = torch.max(outputs, 1)
-            acc(preds, labels)
-            precision(preds, labels)
-            recall(preds, labels)
-    return acc.compute(), precision.compute(), recall.compute()
+# ---------- Sidebar: metryki ----------
 
-# Wywołanie na starcie
 if "test_accuracy" not in st.session_state:
     st.session_state.test_accuracy, st.session_state.test_precision, st.session_state.test_recall = compute_metrics(model, test_loader)
 st.sidebar.write(f"Test accuracy: \n{st.session_state.test_accuracy}")
 st.sidebar.write(f"Test precision: \n{st.session_state.test_precision}")
 st.sidebar.write(f"Test recall: \n{st.session_state.test_recall}")
 
+# ---------- Sidebar: legenda ----------
 
-st.set_page_config(page_title="Wykrywanie ksztaltow", layout="wide")
-st.title("Wykrywanie ksztaltow")
-
-# ---------- Panel boczny ---------- #
 st.sidebar.markdown("### Legenda kształtów")
 st.sidebar.markdown("- 🟥 **Kwadrat** (czerwony obrys)")
 st.sidebar.markdown("- 🟩 **Koło** (zielony obrys)")
 st.sidebar.markdown("- 🟦 **Trójkąt** (niebieski obrys)")
+
+# ---------- UI ----------
+
+st.set_page_config(page_title="Wykrywanie ksztaltow", layout="wide")
+st.title("Wykrywanie ksztaltow")
 
 uploaded_file = st.file_uploader("Wczytaj obraz dokumentu", type=["jpg", "jpeg", "png"])
 
@@ -235,8 +248,15 @@ if uploaded_file is not None:
             st.session_state.uncertain_index += 1
         if col4.button("Żaden z nich", key=f"none_{st.session_state.uncertain_index}"):
             # Usuń ten bounding box z listy niepewnych (pomijamy go)
-            st.session_state.uncertain_index += 1
-
+            del shape_img.uncertain_shapes[st.session_state.uncertain_index]
+            uncertain_count -= 1
+            # Nie dodajemy do manual_labels, przechodzimy do kolejnego
+            # Jeśli usuwamy ostatni, nie zwiększaj indeksu
+            if st.session_state.uncertain_index >= uncertain_count:
+                st.session_state.uncertain_index = uncertain_count
+            else:
+                st.session_state.uncertain_index += 1
+                
     # 3. Po ręcznym oznaczeniu wszystkich niepewnych kształtów pojawia się pytanie o retrening
     if st.session_state.labeling_active and st.session_state.uncertain_index >= uncertain_count and not st.session_state.retrain_question:
         st.session_state.retrain_question = True
