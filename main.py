@@ -2,13 +2,11 @@ import streamlit as st
 from PIL import Image
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import torch
 from torch import optim
 from torch import nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-import torchvision
 import torch.nn.functional as F
 import torchmetrics
 import kagglehub
@@ -256,7 +254,7 @@ if uploaded_file is not None:
                 st.session_state.uncertain_index = uncertain_count
             else:
                 st.session_state.uncertain_index += 1
-                
+
     # 3. Po ręcznym oznaczeniu wszystkich niepewnych kształtów pojawia się pytanie o retrening
     if st.session_state.labeling_active and st.session_state.uncertain_index >= uncertain_count and not st.session_state.retrain_question:
         st.session_state.retrain_question = True
